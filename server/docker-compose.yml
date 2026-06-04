@@ -1,0 +1,51 @@
+# Local development + test infrastructure for the FieldNote backend.
+#
+# Ports match the harness defaults in test/e2e-env.ts, so once these are up,
+# `npm run test:e2e` and `npm run test:integration` need no extra configuration.
+# This is for local/CI use only — production runs Railway-managed Postgres/Redis
+# and Cloudflare R2 (never LocalStack).
+#
+#   docker compose up -d        # start Postgres (5544), Redis (6399), S3 (4566)
+#   npm run prisma:migrate:dev  # apply migrations to the local DB
+#   docker compose down -v      # stop and wipe volumes
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fieldnote
+    ports:
+      - "5544:5432"
+    volumes:
+      - fieldnote_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fieldnote"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports:
+      - "6399:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: s3
+      DEBUG: "0"
+    ports:
+      - "4566:4566"
+    volumes:
+      - fieldnote_localstack:/var/lib/localstack
+
+volumes:
+  fieldnote_pg:
+  fieldnote_localstack:

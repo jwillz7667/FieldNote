@@ -1,0 +1,131 @@
+// FieldNote — canonical data model. Postgres is the source of truth (handoff §6).
+// Every change goes through `prisma migrate`; never hand-edit the database.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Pipeline state machine: CREATED → UPLOADING → QUEUED → TRANSCRIBING →
+/// COMPILING → RENDERING → READY | FAILED. The worker advances it idempotently.
+enum JobStatus {
+  CREATED
+  UPLOADING
+  QUEUED
+  TRANSCRIBING
+  COMPILING
+  RENDERING
+  READY
+  FAILED
+}
+
+/// Exactly one severity per finding. Never widened without a migration + client update.
+enum Severity {
+  INFO
+  MAINTENANCE
+  REPAIR
+  SAFETY
+}
+
+model User {
+  id        String   @id @default(uuid()) @db.Uuid
+  appleSub  String   @unique
+  email     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobs          Job[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+/// Hashed, rotating refresh tokens. We store only the SHA-256 hash so a DB leak
+/// can't replay tokens. Rotation chains via `replacedByTokenHash`; reuse of a
+/// revoked token (theft signal) lets the service revoke the whole chain.
+model RefreshToken {
+  id                  String    @id @default(uuid()) @db.Uuid
+  userId              String    @db.Uuid
+  user                User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash           String    @unique
+  expiresAt           DateTime
+  revokedAt           DateTime?
+  replacedByTokenHash String?
+  createdAt           DateTime  @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model Job {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label        String
+  status       JobStatus @default(CREATED)
+  transcript   String?
+  audioKey     String?
+  pdfKey       String?
+  errorMessage String?
+  /// Per-user idempotency for POST /jobs. NULLs are distinct in Postgres, so
+  /// jobs created without a key don't collide.
+  idempotencyKey String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  sections ReportSection[]
+  events   ProcessingEvent[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([status])
+  @@map("jobs")
+}
+
+model ReportSection {
+  id        String   @id @default(uuid()) @db.Uuid
+  jobId     String   @db.Uuid
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  title     String
+  sortOrder Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  findings Finding[]
+
+  @@index([jobId])
+  @@map("report_sections")
+}
+
+model Finding {
+  id        String        @id @default(uuid()) @db.Uuid
+  sectionId String        @db.Uuid
+  section   ReportSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  text      String
+  severity  Severity
+  sortOrder Int
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([sectionId])
+  @@map("findings")
+}
+
+/// Append-only audit trail: one row per pipeline stage transition.
+model ProcessingEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  jobId     String   @db.Uuid
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  stage     String
+  status    String
+  message   String?
+  createdAt DateTime @default(now())
+
+  @@index([jobId, createdAt])
+  @@map("processing_events")
+}

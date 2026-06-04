@@ -1,0 +1,69 @@
+name: FieldNote
+options:
+  bundleIdPrefix: com.viralventures
+  deploymentTarget:
+    iOS: "26.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: "YES"
+    GCC_TREAT_WARNINGS_AS_ERRORS: "NO"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: "NO"
+
+targets:
+  FieldNote:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.viralventures.fieldnote
+        PRODUCT_NAME: FieldNote
+        GENERATE_INFOPLIST_FILE: "NO"
+        INFOPLIST_FILE: Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/FieldNote.entitlements
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        TARGETED_DEVICE_FAMILY: "1"
+        ENABLE_PREVIEWS: "YES"
+        SWIFT_VERSION: "6.0"
+      configs:
+        Debug:
+          FN_API_BASE_URL: http://localhost:8080
+        Release:
+          FN_API_BASE_URL: https://api.fieldnote.app
+
+  FieldNoteTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/FieldNoteTests
+    dependencies:
+      - target: FieldNote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.viralventures.fieldnoteTests
+        GENERATE_INFOPLIST_FILE: "YES"
+        SWIFT_VERSION: "6.0"
+
+schemes:
+  FieldNote:
+    build:
+      targets:
+        FieldNote: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - FieldNoteTests

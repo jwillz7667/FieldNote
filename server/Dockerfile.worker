@@ -1,0 +1,106 @@
+# syntax=docker/dockerfile:1
+#
+# FieldNote worker image — the BullMQ pipeline (transcribe → compile → render PDF).
+# Includes the Puppeteer-matched headless Chromium and its system libraries.
+#
+# Separate from Dockerfile.api because Railway's config-as-code cannot select a
+# multi-stage target; the `builder` stage is identical, only the runtime differs.
+#
+#   docker build -f Dockerfile.worker -t fieldnote-worker .
+
+############################  Builder  ############################
+FROM node:22-bookworm-slim AS builder
+WORKDIR /app
+
+# Prisma needs openssl at `generate` time; ca-certificates for npm over TLS.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Chrome is fetched in the runtime stage (into the runtime user's cache), not here —
+# keep the heavy download out of the dependency-install layer.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY prisma ./prisma
+RUN npx prisma generate
+
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY src ./src
+RUN npm run build
+
+# Collapse to production dependencies (retains the generated Prisma client).
+RUN npm prune --omit=dev
+
+
+############################  Runtime  ############################
+FROM node:22-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+
+# tini reaps zombie children (critical here — Chromium forks heavily) and forwards
+# SIGTERM; openssl satisfies the Prisma query engine's runtime linkage.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root runtime user. Chromium runs with --no-sandbox, so it must not be root.
+RUN groupadd --system --gid 1001 nodeapp \
+    && useradd --system --uid 1001 --gid nodeapp --home-dir /home/nodeapp --create-home nodeapp
+
+# Runtime shared libraries + base fonts that headless Chromium links against.
+# (Debian Bookworm package names; --no-install-recommends keeps the image lean.)
+# This list is mirrored verbatim by the CI integration job (.github/workflows/ci.yml).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        fonts-liberation \
+        fonts-noto-color-emoji \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libatk1.0-0 \
+        libcairo2 \
+        libcups2 \
+        libdbus-1-3 \
+        libdrm2 \
+        libexpat1 \
+        libfontconfig1 \
+        libgbm1 \
+        libglib2.0-0 \
+        libgtk-3-0 \
+        libnspr4 \
+        libnss3 \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb1 \
+        libxcomposite1 \
+        libxcursor1 \
+        libxdamage1 \
+        libxext6 \
+        libxfixes3 \
+        libxi6 \
+        libxkbcommon0 \
+        libxrandr2 \
+        libxrender1 \
+        libxshmfence1 \
+        libxtst6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Shared cache that Puppeteer writes Chrome into at build time and reads at runtime.
+ENV PUPPETEER_CACHE_DIR=/home/nodeapp/.cache/puppeteer
+
+COPY --from=builder --chown=nodeapp:nodeapp /app/node_modules ./node_modules
+COPY --from=builder --chown=nodeapp:nodeapp /app/dist ./dist
+COPY --from=builder --chown=nodeapp:nodeapp /app/prisma ./prisma
+COPY --chown=nodeapp:nodeapp package.json ./
+
+USER nodeapp
+
+# Provision the exact Chrome build Puppeteer is pinned to, into PUPPETEER_CACHE_DIR.
+RUN node node_modules/puppeteer/install.mjs
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "dist/worker.js"]

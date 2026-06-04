@@ -1,0 +1,28 @@
+# Build artifacts and dependencies are produced inside the image, never copied in.
+node_modules
+dist
+build
+coverage
+
+# Secrets must never enter the build context (only .env.example is tracked anyway).
+.env
+.env.*
+!.env.example
+
+# Tests and tooling are not needed at runtime; tsconfig.build.json already excludes
+# *.spec.ts / *.test.ts from the compile, and the image installs prod deps only.
+test
+**/*.spec.ts
+**/*.test.ts
+
+# VCS, CI, editor, and Docker meta — irrelevant to the image.
+.git
+.gitignore
+.github
+.vscode
+.idea
+Dockerfile*
+.dockerignore
+railway.*.json
+*.log
+npm-debug.log*

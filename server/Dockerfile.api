@@ -1,0 +1,70 @@
+# syntax=docker/dockerfile:1
+#
+# FieldNote API image — the HTTP service (auth, jobs, media, health). No Chromium.
+#
+# Railway's config-as-code has no multi-stage `target` selector, so the API and the
+# worker are separate Dockerfiles referenced per-service (railway.api.json /
+# railway.worker.json). The `builder` stage here is identical to Dockerfile.worker's;
+# only the runtime differs (this one stays lean — no headless browser).
+#
+#   docker build -f Dockerfile.api -t fieldnote-api .
+
+############################  Builder  ############################
+FROM node:22-bookworm-slim AS builder
+WORKDIR /app
+
+# Prisma needs openssl at `generate` time; ca-certificates for npm over TLS.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Chromium is provisioned only in the worker image, never during dependency install.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY prisma ./prisma
+RUN npx prisma generate
+
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
+COPY src ./src
+RUN npm run build
+
+# Collapse to production dependencies (retains the generated Prisma client + CLI).
+RUN npm prune --omit=dev
+
+
+############################  Runtime  ############################
+FROM node:22-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+# No browser here; make doubly sure nothing tries to fetch one.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+# tini reaps zombies and forwards SIGTERM for graceful shutdown; openssl satisfies
+# the Prisma query engine's runtime linkage.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root runtime user.
+RUN groupadd --system --gid 1001 nodeapp \
+    && useradd --system --uid 1001 --gid nodeapp --home-dir /home/nodeapp --create-home nodeapp
+
+COPY --from=builder --chown=nodeapp:nodeapp /app/node_modules ./node_modules
+COPY --from=builder --chown=nodeapp:nodeapp /app/dist ./dist
+COPY --from=builder --chown=nodeapp:nodeapp /app/prisma ./prisma
+COPY --chown=nodeapp:nodeapp package.json ./
+
+USER nodeapp
+EXPOSE 8080
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Apply pending migrations before serving. `migrate deploy` is idempotent and takes
+# a Postgres advisory lock, so it is safe when multiple API replicas boot together
+# (losers see "no pending migrations"). On failure the container exits non-zero and
+# the release is rolled back — fail-fast. `exec` hands PID 1 to node so tini
+# forwards SIGTERM straight to it. (Railway users wanting strict zero-downtime can
+# instead move the migrate step to deploy.preDeployCommand — see docs/DEPLOY-RAILWAY.md.)
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && exec node dist/main.js"]

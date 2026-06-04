@@ -1,0 +1,200 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Reading the repo is all CI needs; deny everything else by default.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ───────────────────────────── Backend ─────────────────────────────
+  # Lint + type-check (tsc via nest build) + the full test pyramid:
+  # unit (no I/O) → e2e (real Postgres + Redis) → integration (Postgres +
+  # LocalStack R2 + real headless Chromium, mock STT/LLM). The test harness
+  # (test/e2e-env.ts) forces deterministic env and defaults the infra URLs to the
+  # ports mapped below, so no secrets are needed.
+  server:
+    name: Server · lint · build · test
+    # Pinned to jammy: Chromium's shared-lib package names are stable here (24.04's
+    # t64 ABI rename would otherwise break the apt list below, which mirrors
+    # server/Dockerfile.worker).
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: server
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fieldnote
+        ports:
+          - 5544:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d fieldnote"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7
+        ports:
+          - 6399:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      localstack:
+        image: localstack/localstack:3
+        env:
+          SERVICES: s3
+          DEBUG: "0"
+        ports:
+          - 4566:4566
+
+    env:
+      # Match the harness defaults (test/e2e-env.ts) to the service port mappings.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5544/fieldnote?schema=fieldnote_test
+      REDIS_URL: redis://localhost:6399
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install headless-Chromium system libraries
+        # Mirrors the runtime libs in server/Dockerfile.worker one-for-one so the
+        # integration suite's bundled Chromium launches under --no-sandbox against
+        # the same dependency set the deployed worker uses.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            fonts-liberation \
+            fonts-noto-color-emoji \
+            libasound2 \
+            libatk-bridge2.0-0 \
+            libatk1.0-0 \
+            libcairo2 \
+            libcups2 \
+            libdbus-1-3 \
+            libdrm2 \
+            libexpat1 \
+            libfontconfig1 \
+            libgbm1 \
+            libglib2.0-0 \
+            libgtk-3-0 \
+            libnspr4 \
+            libnss3 \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libx11-6 \
+            libx11-xcb1 \
+            libxcb1 \
+            libxcomposite1 \
+            libxcursor1 \
+            libxdamage1 \
+            libxext6 \
+            libxfixes3 \
+            libxi6 \
+            libxkbcommon0 \
+            libxrandr2 \
+            libxrender1 \
+            libxshmfence1 \
+            libxtst6
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Wait for LocalStack S3
+        run: |
+          for i in $(seq 1 45); do
+            if curl -sf http://localhost:4566/_localstack/health | grep -q '"s3"'; then
+              echo "LocalStack S3 ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "LocalStack S3 did not become ready in time" >&2
+          exit 1
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+      - name: Integration tests
+        run: npm run test:integration
+
+  # ───────────────────────────── iOS ─────────────────────────────────
+  # XcodeGen regenerates the project from project.yml (the .xcodeproj is a build
+  # artifact and is gitignored). Requires a runner with the iOS 26 SDK (Xcode 26):
+  # the app's deployment target is iOS 26 and it builds against Liquid Glass APIs.
+  # `macos-26` ships Xcode 26; if your org lacks that image, run this job on a
+  # self-hosted iOS 26 toolchain (per CLAUDE.md, glass + a11y still need a physical
+  # device for final sign-off).
+  ios:
+    name: iOS · build · test
+    runs-on: macos-26
+    defaults:
+      run:
+        working-directory: ios
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Resolve an available iPhone simulator
+        id: sim
+        run: |
+          udid=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices | to_entries[]
+                       | select(.key | test("iOS"))
+                       | .value[]
+                       | select(.name | test("iPhone"))][-1].udid // empty')
+          if [ -z "$udid" ]; then
+            echo "No available iOS simulator found" >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "Using simulator $udid"
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+
+      - name: Build & test
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -scheme FieldNote \
+            -destination "id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath build/DD \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO

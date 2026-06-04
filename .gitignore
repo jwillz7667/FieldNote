@@ -1,0 +1,46 @@
+# ───────────────────────── Node / server ─────────────────────────
+node_modules/
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+.npm/
+.eslintcache
+
+# Env & secrets — NEVER commit real values
+.env
+.env.*
+!.env.example
+*.p8
+*.pem
+*.p12
+*.key
+*.mobileprovision
+*.certSigningRequest
+
+# Prisma
+server/prisma/*.db
+server/prisma/*.db-journal
+
+# ───────────────────────── iOS / Xcode ───────────────────────────
+# XcodeGen output (regenerated from project.yml)
+ios/*.xcodeproj/
+*.xcworkspace/xcuserdata/
+**/xcuserdata/
+DerivedData/
+*.xcuserstate
+.swiftpm/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# ───────────────────────── macOS / tooling ───────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+tmp/
+.localstack/
