@@ -116,7 +116,9 @@ Railway's config-as-code can't select a multi-stage `target`, so api and worker 
 have their own Dockerfile and per-service config:
 
 - **api** — [`Dockerfile.api`](Dockerfile.api) (lean, no Chromium) +
-  [`railway.api.json`](railway.api.json). Health-checked on `/health`. The container
+  [`railway.json`](railway.json) (the default filename Railway auto-detects from the
+  `server` root directory — no per-service config path to set). Health-checked on
+  `/health`. The container
   runs `prisma migrate deploy` on boot (idempotent, advisory-locked) before serving
   `dist/main.js`, so schema changes apply automatically on release.
 - **worker** — [`Dockerfile.worker`](Dockerfile.worker) +

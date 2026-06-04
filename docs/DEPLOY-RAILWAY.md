@@ -50,11 +50,19 @@ name the plugins; the defaults are `Postgres` and `Redis`.)
 ## 2. Create the **api** service
 
 1. **New Service → GitHub Repo →** `jwillz7667/FieldNote`.
-2. **Settings → Source:**
-   - **Root Directory:** `server`
-   - **Config-as-code path:** `railway.api.json`
-     (Railway reads it relative to the root directory, so this resolves to
-     `server/railway.api.json`.)
+2. **Settings → Source → Root Directory:** `server`. **That is the only source
+   setting required.** Railway auto-detects [`server/railway.json`](../server/railway.json)
+   (the default config-as-code filename) relative to the root directory — no
+   "config path" field to set.
+
+   > ⚠️ **This is the step that's easy to get wrong.** Railway only auto-detects
+   > files named exactly `railway.json` or `railway.toml`. A custom name (e.g.
+   > `railway.api.json`) is **ignored unless you type its path into the service's
+   > config-path field** — and if it's ignored, Railway silently falls back to its
+   > **Railpack** auto-builder, which then dies with `No start command detected`
+   > (this repo has `start:api`/`start:worker`, no bare `start`). That is exactly the
+   > failure this default-named `railway.json` prevents: it forces the **Dockerfile**
+   > builder and overrides whatever the dashboard defaulted to.
 3. That config pins the builder to [`Dockerfile.api`](../server/Dockerfile.api) and
    sets the health check to `GET /health` (120 s grace) with an `ON_FAILURE` restart
    policy. **Leave the start command empty** — the Dockerfile `CMD` runs
@@ -70,7 +78,7 @@ single api replica. If you scale the api to **multiple replicas** and want stric
 zero-downtime releases, move the migration to a **pre-deploy** step so it runs once
 per release before any new container takes traffic:
 
-- In **railway.api.json** add `"deploy": { "preDeployCommand": "node_modules/.bin/prisma migrate deploy", ... }`, **and**
+- In **railway.json** add `"deploy": { "preDeployCommand": "node_modules/.bin/prisma migrate deploy", ... }`, **and**
 - change the Dockerfile `CMD` to just `exec node dist/main.js` (drop the inline migrate).
 
 The advisory lock makes the boot-time approach safe even with concurrent replicas
@@ -84,7 +92,11 @@ correctness fix.
 1. **New Service → GitHub Repo →** the **same** `jwillz7667/FieldNote` repo.
 2. **Settings → Source:**
    - **Root Directory:** `server`
-   - **Config-as-code path:** `railway.worker.json`
+   - **Config-as-code path:** `railway.worker.json` — **this one you must set
+     explicitly.** The auto-detected default (`railway.json`) is the *api's* config,
+     so the worker service has to be pointed at its own file by name. (Equivalently,
+     set the service variable `RAILWAY_DOCKERFILE_PATH=Dockerfile.worker`.) If you skip
+     this, the worker would build the api image (no Chromium) and never render PDFs.
 3. That config pins the builder to [`Dockerfile.worker`](../server/Dockerfile.worker)
    and sets an `ON_FAILURE` restart policy. **No health check** — the worker serves no
    HTTP; it's a queue consumer. **Leave the start command empty** — the Dockerfile
@@ -102,8 +114,8 @@ correctness fix.
 > **Custom Dockerfile name, alternative wiring.** If you'd rather not use a config
 > file, Railway also honors the service variable `RAILWAY_DOCKERFILE_PATH` — set it to
 > `Dockerfile.api` or `Dockerfile.worker` on the respective service and Railway will
-> build that file. The committed `railway.*.json` configs are the recommended,
-> reviewable source of truth and take precedence.
+> build that file. The committed `railway.json` / `railway.worker.json` configs are the
+> recommended, reviewable source of truth and take precedence.
 
 ---
 

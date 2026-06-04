@@ -3,7 +3,7 @@
 # FieldNote API image — the HTTP service (auth, jobs, media, health). No Chromium.
 #
 # Railway's config-as-code has no multi-stage `target` selector, so the API and the
-# worker are separate Dockerfiles referenced per-service (railway.api.json /
+# worker are separate Dockerfiles referenced per-service (railway.json /
 # railway.worker.json). The `builder` stage here is identical to Dockerfile.worker's;
 # only the runtime differs (this one stays lean — no headless browser).
 #
