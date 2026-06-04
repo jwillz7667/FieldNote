@@ -187,7 +187,10 @@ config fails the deploy fast rather than half-running.
 
 > **Production guardrails enforced at boot (`src/config/env.ts`):** `NODE_ENV=production`
 > rejects (a) any placeholder/`change-me` JWT secret, (b) `JWT_ACCESS_SECRET ==
-> JWT_REFRESH_SECRET`, and (c) a `*` in `CORS_ORIGINS`. Fix the env, not the code.
+> JWT_REFRESH_SECRET`, (c) a `*` in `CORS_ORIGINS`, (d) `APPLE_AUTH_DEV_BYPASS=true`
+> (real Sign in with Apple is mandatory in prod), and (e) `USE_MOCK_AI=true` (the mock
+> providers fabricate reports). Fix the env, not the code. See also
+> [`PRODUCTION-HARDENING.md`](./PRODUCTION-HARDENING.md) for the full go-live checklist.
 
 ---
 
@@ -230,3 +233,7 @@ in the binary). See [`ios/README.md`](../ios/README.md) for where the base URL i
   otherwise failed/lost jobs are re-enqueued by the client's retry/poll loop.
 - **Restart policy:** both services restart `ON_FAILURE` up to 10 times — a crash
   loop surfaces in the deploy logs rather than silently flapping forever.
+- **Proxy / client IP:** the api sets Express `trust proxy = 1` so it reads the real
+  client IP from Railway's `X-Forwarded-For` (one hop). This is what makes the per-IP
+  rate limits — the global 100/min and the tight 10/min on `/auth/*` — apply per
+  client instead of collapsing onto Railway's edge address.
