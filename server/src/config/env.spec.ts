@@ -124,5 +124,9 @@ describe('loadConfig', () => {
       };
       expect(() => loadConfig(env)).toThrow(/JWT_REFRESH_SECRET/);
     });
+
+    it('rejects mock AI in production (would serve fabricated reports)', () => {
+      expect(() => loadConfig({ ...prodBase(), USE_MOCK_AI: 'true' })).toThrow(/USE_MOCK_AI/);
+    });
   });
 });

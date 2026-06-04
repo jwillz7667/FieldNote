@@ -84,6 +84,12 @@ const rawSchema = z
     if (prod && env.APPLE_AUTH_DEV_BYPASS) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['APPLE_AUTH_DEV_BYPASS'], message: 'must be false in production' });
     }
+    // The mock providers emit a canned transcript + a deterministic report. Running
+    // them in production would serve fabricated findings to real users (violating
+    // "never fabricate findings"), so a prod deploy must use the real AI providers.
+    if (prod && env.USE_MOCK_AI) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['USE_MOCK_AI'], message: 'must be false in production' });
+    }
     if (!env.APPLE_AUTH_DEV_BYPASS) {
       for (const key of ['APPLE_TEAM_ID', 'APPLE_KEY_ID', 'APPLE_PRIVATE_KEY'] as const) {
         if (!env[key]) {
